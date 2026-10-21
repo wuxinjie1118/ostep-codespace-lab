@@ -1,0 +1,108 @@
+Lottery Scheduling Homework (Chapter 9: Scheduling -- Proportional Share)
+============================================================================
+Simulator: lottery.py    (run as: python lottery.py <options>)
+All answers below were produced with the -c (compute) flag; full per-slice
+winning-ticket traces are kept in the output/ subdirectory.
+
+--------------------------------------------------------------------------
+Q1.  Three random jobs, seeds 1, 2, 3
+--------------------------------------------------------------------------
+Seed 1:  python lottery.py -j 3 -s 1 -c
+  Job 0 (len 1, tix 84)  Job 1 (len 7, tix 25)  Job 2 (len 4, tix 44)
+  --> JOB 0 DONE at time 2 | JOB 2 DONE at time 6 | JOB 1 DONE at time 12
+  (turnaround = completion time, all jobs start at 0)
+
+Seed 2:  python lottery.py -j 3 -s 2 -c
+  Job 0 (len 9, tix 94)  Job 1 (len 8, tix 73)  Job 2 (len 6, tix 30)
+  --> JOB 0 DONE at time 14 | JOB 1 DONE at time 22 | JOB 2 DONE at time 23
+  (Note: Job 2 has the fewest tickets and finishes last -- expected, since
+   ticket share is only a *probability*, not a guarantee.)
+
+Seed 3:  python lottery.py -j 3 -s 3 -c
+  Job 0 (len 2, tix 54)  Job 1 (len 3, tix 60)  Job 2 (len 6, tix 6)
+  --> JOB 1 DONE at time 4 | JOB 0 DONE at time 5 | JOB 2 DONE at time 11
+
+--------------------------------------------------------------------------
+Q2.  Extreme ticket imbalance: 1 ticket vs 100 tickets
+--------------------------------------------------------------------------
+  python lottery.py -l 10:1,10:100 -c     (Job0: len 10, 1 ticket; Job1: len 10, 100 tickets)
+
+Job0 almost never runs before Job1 completes.  Over seeds 0..22 (23 runs),
+Job0 got a slice before Job1 finished in only ONE case (seed 19, where it
+won 1 slice and Job1 finished at time 11); in the other 22 runs Job1 won
+every lottery and finished first (times 10 or 11), and Job0 only started
+afterwards (finishing at 20).
+
+Probability: Job1 needs 10 slices; Job0 wins a given slice with probability
+1/101, so P(Job0 runs at least once before Job1 finishes) =
+  1 - (100/101)^10 =~ 0.095  (about 9.5%).
+
+General effect of such a ticket imbalance: the 1-ticket job is effectively
+starved over short intervals -- it is overwhelmingly likely to never run at
+all before the 100-ticket job completes.  Lottery scheduling only
+approximates the ticket proportions in the long run (law of large numbers);
+over short horizons the small-ticket job can be completely shut out.
+
+--------------------------------------------------------------------------
+Q3.  Fairness of two equal jobs (100:100 tickets), quantum = 1
+--------------------------------------------------------------------------
+  python lottery.py -l 100:100,100:100 -s SEED -c
+  (each job: run length 100, 100 tickets)
+
+  seed 0: JOB0@192, JOB1@200  -> F = 192/200 = 0.960
+  seed 1: JOB1@196, JOB0@200  -> F = 196/200 = 0.980
+  seed 2: JOB1@190, JOB0@200  -> F = 190/200 = 0.950
+  seed 3: JOB0@196, JOB1@200  -> F = 196/200 = 0.980
+  seed 4: JOB1@199, JOB0@200  -> F = 199/200 = 0.995
+  Average F =~ 0.973.
+
+  So even with equal tickets the scheduler is noticeably unfair over this
+  horizon: the "unlucky" job typically finishes 4-10ms (2-5%) earlier than
+  the other; the second job always finishes at 200.  Fairness is only
+  probabilistic and improves as jobs run longer (see Q5 graph).
+
+--------------------------------------------------------------------------
+Q4.  Effect of a larger quantum
+--------------------------------------------------------------------------
+  python lottery.py -l 100:100,100:100 -q N -s SEED -c
+
+  quantum 1 :  avg F ~ 0.973  (seeds 0-4)
+  quantum 10:  seed0 150/200 -> 0.75 | seed1 160/200 -> 0.80
+  quantum 50:  seed0 150/200 -> 0.75
+  quantum 100: seed0 100/200 -> 0.50
+
+  A larger quantum means fewer lottery draws, so the outcomes become
+  coarser and less fair.  With quantum = 100 (equal to the job length),
+  whichever job wins the FIRST lottery runs its whole 100ms to completion
+  and finishes first, so F = 0.5 every time -- maximum unfairness.
+  In general: smaller quanta -> more draws -> fairer (but more context-switch
+  overhead).
+
+--------------------------------------------------------------------------
+Q5.  Fairness-vs-job-length graph (textbook Figure 9.2) and stride
+--------------------------------------------------------------------------
+Replication:  fairness.py  (stdlib-only script that replicates lottery.py's
+ticket selection exactly: r = int(random()*1000001), winner = r % total)
+  Outputs:  fairness.csv  (data)   fairness_graph.svg  (plot)
+  30 trials per job length R, two jobs with 100 tickets each, quantum 1:
+
+  R      :   1     2     5    10    20    50   100   200   500  1000
+  avg F  : 0.50  0.64  0.76  0.83  0.88  0.92  0.95  0.97  0.98  0.98
+
+  Shape matches the textbook: fairness starts very low (R=1: whoever wins
+  the single lottery finishes at t=1, the loser at t=2, so F=0.5) and
+  asymptotically approaches 1 as the job length grows -- randomness delivers
+  the ticket proportions only over the long run.
+
+  Worth exploring further: more than two jobs; unequal ticket ratios and how
+  fast realized shares converge to the ticket proportions; the variance of F
+  (not just its mean).
+
+  With a STRIDE scheduler the graph would be a flat line at F = 1.0 for every
+  R: stride is deterministic.  Two jobs with equal tickets get equal strides,
+  the scheduler always picks the job with the lowest pass value, so the two
+  jobs alternate perfectly and finish at exactly the same time -- perfect
+  fairness with zero variance, no matter how short the jobs are.  The cost:
+  per-job pass state must be maintained (new jobs joining mid-run are
+  awkward), whereas lottery scheduling is stateless and handles arrivals
+  naturally.

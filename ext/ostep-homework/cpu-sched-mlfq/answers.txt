@@ -1,0 +1,123 @@
+MLFQ Homework (Chapter 8: Scheduling -- The Multi-Level Feedback Queue)
+======================================================================
+Simulator: mlfq.py    (run as: python mlfq.py <options>)
+All answers below were produced with the -c (compute) flag; full execution
+traces are kept in the output/ subdirectory.
+
+--------------------------------------------------------------------------
+Q1.  Two jobs, two queues, short jobs, I/O turned off
+--------------------------------------------------------------------------
+Run 1:  python mlfq.py -n 2 -q 2 -l 0,5,0:0,8,0 -c
+  Jobs:  Job 0 (start 0, run 5ms, no I/O)   Job 1 (start 0, run 8ms, no I/O)
+  Trace: the two jobs round-robin at the high queue (Q1) with 2ms slices and
+         are demoted to Q0 after their first slice:
+           t0-1 Job0 @Q1 | t2-3 Job1 @Q1 | t4-5 Job0 @Q0 | t6-7 Job1 @Q0
+           t8   Job0 -> FINISHED at t=9 | t9-12 Job1 -> FINISHED at t=13
+  Results: Job 0: response 0, turnaround 9   Job 1: response 2, turnaround 13
+           Avg:  response 1.00, turnaround 11.00
+
+Run 2:  python mlfq.py -n 2 -q 3 -l 0,7,0:0,4,0 -c
+  Jobs:  Job 0 (run 7ms)   Job 1 (run 4ms)
+  Trace: Job0 uses its full 3ms slice first at Q1, then Job1; both drop to
+         Q0 after one slice and finish there.
+  Results: Job 0: response 0, turnaround 11   Job 1: response 3, turnaround 10
+           Avg:  response 1.50, turnaround 10.50
+
+--------------------------------------------------------------------------
+Q2.  Reproducing the examples of the chapter
+--------------------------------------------------------------------------
+Fig 8.2 (single long-running job):
+  python mlfq.py -n 3 -q 10 -l 0,200,0 -c
+  The job enters the top queue Q2, runs one 10ms slice there, is demoted to
+  Q1 after 10ms, and to Q0 after 20ms, where it stays until completion at
+  t=200.  (Exactly the "Q2 -> Q1 -> Q0" staircase of the figure.)
+
+Fig 8.3 (a short job arrives while a long job runs):
+  python mlfq.py -n 3 -q 10 -l 0,180,0:100,20,0 -c
+  Job0 (CPU-bound, 180ms) sinks to the bottom queue. Job1 arrives at t=100,
+  is placed in the top queue Q2, runs only 2 slices (20ms) and FINISHES at
+  t=120 before ever being demoted -- response 0, turnaround 20 -- then Job0
+  resumes and finishes at t=200.  MLFQ approximates SJF for the short job.
+
+Fig 8.4 (I/O-bound job vs CPU-bound job):
+  python mlfq.py -n 3 -q 10 -l 0,100,0:0,100,1 -c
+  Job1 issues an I/O every 1ms of CPU, so under the rules it keeps top
+  priority (Q2) and preempts Job0, which sinks to Q1/Q0:
+    t0-9  Job0 @Q2 | t10 Job1 @Q2, IO at t=11 | t11-15 Job0 @Q1
+    t16   Job1 resumes @Q2 ... (alternating)
+  Results: Job 0: response 0, turnaround 118   Job 1: response 10, turnaround 605
+  Interactive job 1 stays at high priority thanks to its frequent I/O.
+
+(The boost / gaming variants of Figs 8.5-8.7 are exercised in Q4/Q5 below.)
+
+--------------------------------------------------------------------------
+Q3.  Behaving exactly like a round-robin scheduler
+--------------------------------------------------------------------------
+  python mlfq.py -n 1 -q 2 -l 0,10,0:0,10,0:0,10,0 -c
+  Using a SINGLE queue (-n 1) makes every job equal priority, so Rule 2
+  reduces the whole scheduler to round-robin with the given quantum:
+    Results: Job 0: response 0,  turnaround 26
+             Job 1: response 2,  turnaround 28
+             Job 2: response 4,  turnaround 30
+  (Each job runs 2ms at a time in cyclic order: 0,1,2,0,1,2,...)
+
+--------------------------------------------------------------------------
+Q4.  Gaming the scheduler with the old Rules 4a/4b (-S)
+--------------------------------------------------------------------------
+Workload:  python mlfq.py -n 3 -S -I -i 1 -q 100 -l 0,500,99:0,500,0 -c
+  Job 0: run 500ms, issues an I/O every 99ms (1ms before its 100ms slice ends)
+  Job 1: CPU-bound, run 500ms, no I/O
+  With -S (old Rules 4a/4b) Job0's tick/allotment counters are reset every
+  time it issues an I/O, so it NEVER leaves the top queue; with -I it is
+  re-inserted at the HEAD of the top queue right after each I/O completes.
+  Result: over [0,505) Job0 runs 500 of 505ms = 99.0% of the CPU; Job1 gets
+  only the 5 x 1ms I/O windows.  (Job0 DONE at 505, Job1 DONE at 1000.)
+  Gaming principle: by issuing an I/O just before its slice ends, an I/O-bound
+  job retains top priority forever and nearly monopolizes the CPU -- exactly
+  the attack that the newer Rule 4 (allotment-based accounting) removes.
+
+  Without -I the same -S workload still gives ~99% except for one early
+  100ms window (Job1's first full slice before it is demoted):
+  python mlfq.py -n 3 -S -i 1 -q 100 -l 0,9900,99:0,9900,0 -c
+  --> over its lifetime Job0 holds ~98% of the CPU.
+
+--------------------------------------------------------------------------
+Q5.  Boost interval that guarantees >= 5% CPU to a starving long job
+--------------------------------------------------------------------------
+Starvation scenario (old rules, two interactive jobs that alternate 1ms of
+CPU and 1ms of I/O forever at the top queue):
+  python mlfq.py -n 3 -q 10 -S -i 1 -l 0,1000,0:0,1000,1:0,1000,1 -c
+  The long Job0 gets the CPU only for its initial 20ms, then 0ms from
+  t=10 until t~2001: it is completely starved while interactive jobs hog Q2.
+
+With a priority boost every 200ms:
+  python mlfq.py -n 3 -q 10 -S -B 200 -i 1 -l 0,1000,0:0,1000,1:0,1000,1 -c
+  Job0 runs exactly 10ms in every 200ms window -> 5.0% of the CPU
+  (verified window by window: [0,200):10ms, [200,400):10ms, ... all 5.0%).
+
+Answer: with quantum q = 10ms in the top queue, a boosted job is guaranteed
+at least one full 10ms slice per boost period S, so we need 10/S >= 0.05,
+i.e. S <= 200ms.  Boost at least every 200ms (-B 200), or in general
+S <= q / 0.05 = 20*q.
+
+--------------------------------------------------------------------------
+Q6.  Effect of the -I flag (queue re-insertion policy after I/O)
+--------------------------------------------------------------------------
+Workload (two desynchronized I/O jobs at one priority level):
+  python mlfq.py -n 1 -q 5 -i 3 -l 0,20,2:0,20,3 -c            (no -I)
+  python mlfq.py -n 1 -q 5 -i 3 -l 0,20,2:0,20,3 -I -c         (with -I)
+
+Without -I, a job that finishes an I/O is appended to the BACK of its
+queue: at t=10 Job0's I/O completes, but Job1 is mid-slice at the head of
+the queue and keeps running until its slice ends -- Job0 must wait.
+  Results: Job 0: response 0, turnaround 52 | Job 1: response 2, turnaround 40
+
+With -I, the job that finishes an I/O is inserted at the FRONT of its queue
+and runs immediately: at t=10 Job0 runs right away (trace differs from
+t=10 onward).
+  Results: Job 0: response 0, turnaround 51 | Job 1: response 2, turnaround 47
+
+Conclusion: -I favors I/O-bound jobs (they resume without waiting behind a
+CPU-bound job's long slice), improving their response/turnaround, at the
+expense of the CPU-bound job at the same level; without -I an I/O job can be
+delayed behind the head-of-queue job's entire quantum.
